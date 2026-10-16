@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
-from sqlalchemy import DateTime, Integer, String, Text
-from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
+from sqlalchemy import DateTime, Integer, String, Text, create_engine, select
+from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, sessionmaker
 
 
 def utcnow() -> datetime:
@@ -55,3 +55,37 @@ class RecoveryEvent(Base):
     # resolved | failed | skipped
     outcome: Mapped[str] = mapped_column(String(32))
     duration_seconds: Mapped[float | None] = mapped_column(nullable=True)
+
+
+class Store:
+    def __init__(self, database_url: str) -> None:
+        connect_args = {"check_same_thread": False} if database_url.startswith("sqlite") else {}
+        self.engine = create_engine(database_url, connect_args=connect_args, pool_pre_ping=True)
+        self._sessions = sessionmaker(self.engine, expire_on_commit=False)
+
+    def create_schema(self) -> None:
+        Base.metadata.create_all(self.engine)
+
+    def session(self) -> Session:
+        return self._sessions()
+
+    # --- reads used by the API -------------------------------------------
+
+    def list_states(self) -> list[ContainerState]:
+        with self.session() as s:
+            return list(s.scalars(select(ContainerState).order_by(ContainerState.name)))
+
+    def list_events(self, container: str | None = None, limit: int = 100) -> list[RecoveryEvent]:
+        with self.session() as s:
+            q = select(RecoveryEvent).order_by(RecoveryEvent.id.desc()).limit(limit)
+            if container:
+                q = q.where(RecoveryEvent.container_name == container)
+            return list(s.scalars(q))
+
+    def restarts_since(self, s: Session, name: str, since: datetime) -> int:
+        q = select(RecoveryEvent).where(
+            RecoveryEvent.container_name == name,
+            RecoveryEvent.action == "restart",
+            RecoveryEvent.created_at >= since,
+        )
+        return len(list(s.scalars(q)))
