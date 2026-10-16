@@ -6,6 +6,7 @@ from datetime import UTC, datetime
 
 from sqlalchemy import DateTime, Integer, String, Text, create_engine, select
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, sessionmaker
+from sqlalchemy.pool import StaticPool
 
 
 def utcnow() -> datetime:
@@ -59,8 +60,12 @@ class RecoveryEvent(Base):
 
 class Store:
     def __init__(self, database_url: str) -> None:
-        connect_args = {"check_same_thread": False} if database_url.startswith("sqlite") else {}
-        self.engine = create_engine(database_url, connect_args=connect_args, pool_pre_ping=True)
+        kwargs: dict = {"pool_pre_ping": True}
+        if database_url.startswith("sqlite"):
+            kwargs["connect_args"] = {"check_same_thread": False}
+            if database_url in ("sqlite://", "sqlite:///:memory:"):
+                kwargs["poolclass"] = StaticPool  # one shared in-memory database
+        self.engine = create_engine(database_url, **kwargs)
         self._sessions = sessionmaker(self.engine, expire_on_commit=False)
 
     def create_schema(self) -> None:
