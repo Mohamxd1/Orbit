@@ -42,3 +42,37 @@ def test_failed_validation_is_recorded(monitor, docker, store):
     [event] = store.list_events("web")
     assert event.outcome == "failed"
     assert state(store, "web").health == "unhealthy"
+
+
+def test_cooldown_blocks_immediate_second_restart(monitor, docker, store):
+    c = docker.add("web", status="exited")
+    docker.after_restart[c.id] = c
+    for _ in range(5):
+        monitor.poll_once()
+    assert docker.restarts == ["id-web"]
+    assert "cooldown" in state(store, "web").reason
+
+
+def test_threshold_stops_crash_loop(monitor, docker, store, settings):
+    c = docker.add("web", status="exited")
+    docker.after_restart[c.id] = c
+    for _ in range(10):
+        monitor.poll_once()
+        # Fast-forward past the cooldown by back-dating the last restart.
+        with store.session() as s:
+            st = s.get(ContainerState, "web")
+            if st.last_restart_at:
+                st.last_restart_at = utcnow() - timedelta(seconds=settings.cooldown_seconds + 1)
+            s.commit()
+    assert len(docker.restarts) == settings.max_restarts
+    assert state(store, "web").health == "given_up"
+    actions = [e.action for e in store.list_events("web")]
+    assert actions.count("skipped_threshold") == 1  # logged once, not every poll
+
+
+def test_per_container_label_overrides(monitor, docker, store):
+    docker.add("web", status="exited", labels={"orbit.max_restarts": "0"})
+    monitor.poll_once()
+    monitor.poll_once()
+    assert docker.restarts == []
+    assert state(store, "web").health == "given_up"
