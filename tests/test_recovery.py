@@ -76,3 +76,37 @@ def test_per_container_label_overrides(monitor, docker, store):
     monitor.poll_once()
     assert docker.restarts == []
     assert state(store, "web").health == "given_up"
+
+
+def test_heartbeat_failure_triggers_restart(monitor, docker, store, heartbeats):
+    docker.add("api", health="healthy", labels={"orbit.heartbeat.url": "http://api/hb"})
+    heartbeats["http://api/hb"] = "heartbeat failed: timeout"
+    real_restart = docker.restart
+
+    def restart_and_recover(container_id, timeout=10):
+        real_restart(container_id, timeout)
+        heartbeats.clear()  # heartbeat answers again once restarted
+
+    docker.restart = restart_and_recover
+    monitor.poll_once()
+    monitor.poll_once()
+    assert docker.restarts == ["id-api"]
+    [event] = store.list_events("api")
+    assert event.outcome == "resolved"
+
+
+def test_restart_error_is_logged(monitor, docker, store):
+    docker.add("web", status="exited")
+    docker.fail_restart = True
+    monitor.poll_once()
+    monitor.poll_once()
+    [event] = store.list_events("web")
+    assert event.action == "restart_error" and event.outcome == "failed"
+
+
+def test_removed_container_marked_missing(monitor, docker, store):
+    c = docker.add("web")
+    monitor.poll_once()
+    del docker.containers[c.id]
+    monitor.poll_once()
+    assert state(store, "web").status == "missing"
