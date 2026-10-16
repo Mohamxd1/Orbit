@@ -2,7 +2,16 @@
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
+
+
+def _int(name: str, default: int) -> int:
+    return int(os.environ.get(name, default))
+
+
+def _float(name: str, default: float) -> float:
+    return float(os.environ.get(name, default))
 
 
 @dataclass(frozen=True)
@@ -28,3 +37,17 @@ class Settings:
     validation_timeout: float = 60.0
     # Timeout for each heartbeat HTTP request.
     heartbeat_timeout: float = 3.0
+
+    @classmethod
+    def from_env(cls) -> Settings:
+        return cls(
+            database_url=os.environ.get("ORBIT_DATABASE_URL", cls.database_url),
+            label=os.environ.get("ORBIT_LABEL", cls.label),
+            poll_interval=_float("ORBIT_POLL_INTERVAL", cls.poll_interval),
+            failure_threshold=_int("ORBIT_FAILURE_THRESHOLD", cls.failure_threshold),
+            cooldown_seconds=_int("ORBIT_COOLDOWN_SECONDS", cls.cooldown_seconds),
+            max_restarts=_int("ORBIT_MAX_RESTARTS", cls.max_restarts),
+            restart_window_seconds=_int("ORBIT_RESTART_WINDOW_SECONDS", cls.restart_window_seconds),
+            validation_timeout=_float("ORBIT_VALIDATION_TIMEOUT", cls.validation_timeout),
+            heartbeat_timeout=_float("ORBIT_HEARTBEAT_TIMEOUT", cls.heartbeat_timeout),
+        )
