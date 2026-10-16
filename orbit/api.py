@@ -14,7 +14,7 @@ from pydantic import BaseModel
 from . import __version__
 from .config import Settings
 from .docker_client import DockerBackend
-from .store import Store, utcnow
+from .store import Store, as_utc, utcnow
 from .worker import Monitor
 
 
@@ -92,6 +92,24 @@ def create_app(
             "failed_recoveries": len(restarts) - resolved,
             "recovery_success_rate": round(resolved / len(restarts), 3) if restarts else None,
             "given_up": [c.name for c in states if c.health == "given_up"],
+        }
+
+    @app.get("/worker")
+    def worker():
+        st = monitor.status
+        last = as_utc(st.last_poll_at)
+        return {
+            "running": st.running,
+            "started_at": st.started_at,
+            "poll_interval_seconds": settings.poll_interval,
+            "poll_count": st.poll_count,
+            "last_poll_at": last,
+            "seconds_since_last_poll": round((utcnow() - last).total_seconds(), 1)
+            if last
+            else None,
+            "last_poll_duration_seconds": st.last_poll_duration,
+            "tracked_containers": st.tracked,
+            "last_error": st.last_error,
         }
 
     return app
