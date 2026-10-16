@@ -1,0 +1,47 @@
+# Production-style deployment: Orbit + PostgreSQL state store.
+#   cp .env.example .env   # then edit secrets
+#   docker compose up -d --build
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-orbit}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-orbit}
+      POSTGRES_DB: ${POSTGRES_DB:-orbit}
+    volumes:
+      - orbit-db:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  orbit:
+    build: .
+    image: orbit:latest
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      ORBIT_DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-orbit}:${POSTGRES_PASSWORD:-orbit}@db:5432/${POSTGRES_DB:-orbit}
+    ports:
+      - "${ORBIT_PUBLISH_PORT:-8080}:8080"
+    volumes:
+      # Orbit needs the Docker socket to inspect and restart containers.
+      - /var/run/docker.sock:/var/run/docker.sock
+    networks:
+      - default
+      - orbit
+
+volumes:
+  orbit-db:
+
+networks:
+  # Attach monitored apps to this network so Orbit can reach their heartbeat URLs.
+  orbit:
+    name: orbit
