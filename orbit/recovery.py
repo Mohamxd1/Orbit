@@ -95,7 +95,7 @@ class RecoveryEngine:
             )
             return
 
-        healthy, detail = True, "ok"  # TODO: validate
+        healthy, detail = self._validate(info.id)
         duration = self.clock() - started
         state.restart_count += 1
         state.last_restart_at = now
@@ -119,3 +119,19 @@ class RecoveryEngine:
         else:
             log.warning("%s: still unhealthy after restart: %s", state.name, detail)
             state.reason = f"still unhealthy after restart: {detail}"
+
+    def _validate(self, container_id: str) -> tuple[bool, str]:
+        """Poll until the container is healthy again or the timeout expires."""
+        deadline = self.clock() + self.settings.validation_timeout
+        detail = "timed out"
+        while True:
+            info = self.docker.get(container_id)
+            if info is None:
+                return False, "container disappeared"
+            result = evaluate(info, self.heartbeat, self.settings.heartbeat_timeout)
+            if result.healthy:
+                return True, "ok"
+            detail = result.reason
+            if self.clock() >= deadline:
+                return False, f"timed out ({detail})"
+            self.sleep(1.0)
