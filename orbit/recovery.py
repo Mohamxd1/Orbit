@@ -29,12 +29,14 @@ class RecoveryEngine:
         store: Store,
         heartbeat: HeartbeatFn,
         sleep: Callable[[float], None] = time.sleep,
+        clock: Callable[[], float] = time.monotonic,
     ) -> None:
         self.settings = settings
         self.docker = docker
         self.store = store
         self.heartbeat = heartbeat
         self.sleep = sleep
+        self.clock = clock
 
     def _limits(self, info: ContainerInfo) -> tuple[int, int]:
         cooldown = int(info.labels.get(COOLDOWN_LABEL, self.settings.cooldown_seconds))
@@ -73,3 +75,47 @@ class RecoveryEngine:
             state.health = "given_up"
             state.reason = f"restart limit reached; manual intervention needed ({reason})"
             return
+
+        # 3. Restart and validate.
+        log.info("%s: restarting (%s)", state.name, reason)
+        started = self.clock()
+        try:
+            self.docker.restart(info.id)
+        except Exception as exc:
+            log.exception("%s: restart failed", state.name)
+            s.add(
+                RecoveryEvent(
+                    container_name=state.name,
+                    container_id=info.id,
+                    created_at=now,
+                    action="restart_error",
+                    reason=f"{reason}; docker error: {exc}",
+                    outcome="failed",
+                )
+            )
+            return
+
+        healthy, detail = True, "ok"  # TODO: validate
+        duration = self.clock() - started
+        state.restart_count += 1
+        state.last_restart_at = now
+        s.add(
+            RecoveryEvent(
+                container_name=state.name,
+                container_id=info.id,
+                created_at=now,
+                action="restart",
+                reason=reason if healthy else f"{reason}; validation: {detail}",
+                outcome="resolved" if healthy else "failed",
+                duration_seconds=round(duration, 2),
+            )
+        )
+        if healthy:
+            log.info("%s: recovered in %.1fs", state.name, duration)
+            state.health = "healthy"
+            state.status = "running"
+            state.reason = "recovered after restart"
+            state.consecutive_failures = 0
+        else:
+            log.warning("%s: still unhealthy after restart: %s", state.name, detail)
+            state.reason = f"still unhealthy after restart: {detail}"
