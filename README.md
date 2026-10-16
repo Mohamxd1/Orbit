@@ -295,3 +295,32 @@ ones before it, so it is also a good order to read the code.
     each code path end to end.
 12. **CI (`.github/workflows/ci.yml`).** Lint, tests and an image build on
     every push and pull request.
+
+## Production checklist
+
+- [ ] Set a strong `POSTGRES_PASSWORD` in `.env` (never commit `.env`).
+- [ ] Don't expose port 8080 to the internet. The API has **no
+      authentication**. Bind it to localhost (`ORBIT_PUBLISH_PORT=127.0.0.1:8080`)
+      or put it behind a reverse proxy with auth and TLS.
+- [ ] Understand the socket mount. Access to `/var/run/docker.sock` is
+      root-equivalent on the host. Only run Orbit images you build yourself.
+- [ ] Back up the `orbit-db` volume if you need long-term history.
+- [ ] Watch Orbit itself: alert on `/health` returning 503 and on a
+      non-empty `given_up` list in `/metrics`.
+- [ ] Tune `ORBIT_VALIDATION_*` to your slowest service's startup time.
+
+## Known limitations and roadmap
+
+- **Single host.** Orbit manages one Docker daemon. Run one Orbit per host.
+- **Validation blocks the loop.** While a restarted container is validated
+  (up to `ORBIT_VALIDATION_TIMEOUT`), other containers aren't checked.
+  Running validations concurrently is the next planned improvement.
+- **No API authentication** yet (see the checklist).
+- **Schema is created automatically** (`create_all`). Schema changes will
+  need Alembic migrations.
+- **Planned:** Prometheus `/metrics` format, webhook/Slack alerts on
+  `given_up`, and a small dashboard UI.
+
+Orbit was built in 2026 as a self-hosted alternative to heavier
+orchestration tools, for environments running plain Docker without
+Kubernetes.
