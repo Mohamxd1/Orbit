@@ -231,3 +231,67 @@ Interactive docs are served at `http://localhost:8080/docs` (Swagger UI).
 Recovery event actions: `restart` (outcome `resolved` or `failed`),
 `skipped_threshold` (restart limit hit), `restart_error` (Docker refused the
 restart).
+
+## Local development
+
+```bash
+python -m venv .venv && source .venv/bin/activate
+pip install -r requirements-dev.txt
+
+pytest -q                       # unit + API tests, no Docker daemon needed
+ruff check . && ruff format --check .
+
+# run against your local Docker with SQLite:
+python -m orbit                 # API on http://localhost:8080
+```
+
+The tests use an in-memory fake Docker backend (`tests/conftest.py`). They
+cover debouncing, cooldown, restart limits, heartbeats, validation (including
+a container that crashes right after restart), restart errors, and every API
+endpoint. CI (`.github/workflows/ci.yml`) runs lint, the tests and a
+`docker build` on every push.
+
+## How the project was built (step by step)
+
+This is the order the pieces were built in. Each step depends only on the
+ones before it, so it is also a good order to read the code.
+
+1. **Define the contract first.** The README described the behaviour:
+   detect, restart safely, validate, audit, expose over REST. That became
+   the five API endpoints and the two tables.
+2. **Configuration (`config.py`).** Every tunable became an `ORBIT_*`
+   environment variable in one frozen `Settings` dataclass. That is what
+   makes the same image work in dev, CI and prod.
+3. **State store (`store.py`).** Two SQLAlchemy models:
+   `container_state` (latest view per container, keyed by name so it
+   survives container re-creation) and `recovery_event` (append-only audit
+   log). SQLite in dev, PostgreSQL in prod, same code.
+4. **Docker abstraction (`docker_client.py`).** A small `DockerBackend`
+   protocol with a real Docker SDK implementation. Everything above it talks
+   to the protocol, so tests can run without a daemon.
+5. **Health evaluation (`health.py`).** A pure function from a container
+   snapshot to a verdict. Exited means unhealthy, the Docker health check is
+   respected, "starting" gets no verdict, and an optional heartbeat catches
+   hung processes.
+6. **Recovery engine (`recovery.py`).** The safety logic, in order:
+   cooldown, then the rolling-window restart limit, then restart, then
+   validation, then an audit event. Validation needs the container to stay
+   healthy for a stabilization period, so a process that starts and
+   immediately crashes is recorded as `failed`, not `resolved`.
+7. **Monitor worker (`worker.py`).** A background thread that runs one pass
+   per interval. It updates state, debounces with consecutive-failure
+   counts, hands off to the engine, and marks containers that disappeared as
+   `missing`. Exceptions are caught and reported on `/worker`, so the loop
+   never dies silently.
+8. **API (`api.py`).** A FastAPI app factory that wires store, Docker,
+   worker and routes together. It starts and stops the worker with the
+   app's lifespan.
+9. **Tests (`tests/`).** A fake Docker backend plus an injectable clock
+   and sleep, so every recovery path is tested in under a second.
+10. **Packaging (`Dockerfile`, `docker-compose.yml`).** A slim Python image
+    with its own `HEALTHCHECK`, and Compose with PostgreSQL, a persistent
+    volume, the Docker socket mount and the shared `orbit` network.
+11. **Demo (`examples/`).** Healthy, flaky and broken workloads that show
+    each code path end to end.
+12. **CI (`.github/workflows/ci.yml`).** Lint, tests and an image build on
+    every push and pull request.
