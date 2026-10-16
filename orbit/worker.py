@@ -47,6 +47,31 @@ class Monitor:
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
 
+    # --- lifecycle --------------------------------------------------------
+
+    def start(self) -> None:
+        self._stop.clear()
+        self.status.running = True
+        self.status.started_at = utcnow()
+        self._thread = threading.Thread(target=self._loop, name="orbit-monitor", daemon=True)
+        self._thread.start()
+
+    def stop(self, timeout: float = 5.0) -> None:
+        self._stop.set()
+        if self._thread:
+            self._thread.join(timeout)
+        self.status.running = False
+
+    def _loop(self) -> None:
+        while not self._stop.is_set():
+            try:
+                self.poll_once()
+                self.status.last_error = None
+            except Exception as exc:  # keep the loop alive no matter what
+                log.exception("monitor pass failed")
+                self.status.last_error = str(exc)
+            self._stop.wait(self.settings.poll_interval)
+
     # --- one monitoring pass ----------------------------------------------
 
     def poll_once(self) -> None:
