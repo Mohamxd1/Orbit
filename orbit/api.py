@@ -7,7 +7,7 @@ import os
 from contextlib import asynccontextmanager
 from datetime import datetime
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Query
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
@@ -28,6 +28,17 @@ class ContainerOut(BaseModel):
     restart_count: int
     last_restart_at: datetime | None
     last_checked_at: datetime
+
+
+class EventOut(BaseModel):
+    id: int
+    container_name: str
+    container_id: str
+    created_at: datetime
+    action: str
+    reason: str
+    outcome: str
+    duration_seconds: float | None
 
 
 def create_app(
@@ -111,5 +122,15 @@ def create_app(
             "tracked_containers": st.tracked,
             "last_error": st.last_error,
         }
+
+    @app.get("/history", response_model=list[EventOut])
+    def history(
+        container: str | None = Query(None, description="Filter by container name"),
+        limit: int = Query(100, ge=1, le=1000),
+    ):
+        return [
+            EventOut.model_validate(e, from_attributes=True)
+            for e in store.list_events(container, limit)
+        ]
 
     return app
