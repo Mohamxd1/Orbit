@@ -110,3 +110,32 @@ def test_removed_container_marked_missing(monitor, docker, store):
     del docker.containers[c.id]
     monitor.poll_once()
     assert state(store, "web").status == "missing"
+
+
+def test_crash_right_after_restart_is_not_resolved(settings, docker, store):
+    """A container that is 'running' for a moment after restart, then dies, is a failure."""
+    from dataclasses import replace
+
+    from orbit.docker_client import ContainerInfo
+    from orbit.recovery import RecoveryEngine
+    from orbit.worker import Monitor
+
+    settings = replace(settings, validation_timeout=30, validation_stable_seconds=5)
+    now = [0.0]
+
+    def sleep(seconds):
+        now[0] += seconds
+        # Two seconds after the restart the process crashes again.
+        if now[0] >= 2:
+            c = docker.containers["id-web"]
+            docker.containers["id-web"] = ContainerInfo(c.id, c.name, "exited", None, c.labels)
+
+    hb = lambda url, timeout: None
+    engine = RecoveryEngine(settings, docker, store, hb, sleep=sleep, clock=lambda: now[0])
+    monitor = Monitor(settings, docker, store, heartbeat=hb, recovery=engine)
+
+    docker.add("web", status="exited")
+    monitor.poll_once()
+    monitor.poll_once()
+    [event] = store.list_events("web")
+    assert event.action == "restart" and event.outcome == "failed"

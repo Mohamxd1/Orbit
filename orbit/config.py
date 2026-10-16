@@ -35,6 +35,8 @@ class Settings:
     restart_window_seconds: int = 600
     # How long to wait for a restarted container to report healthy again.
     validation_timeout: float = 60.0
+    # ...and it must stay healthy this long, so a crash right after start isn't "recovered".
+    validation_stable_seconds: float = 10.0
     # Timeout for each heartbeat HTTP request.
     heartbeat_timeout: float = 3.0
 
@@ -49,5 +51,8 @@ class Settings:
             max_restarts=_int("ORBIT_MAX_RESTARTS", cls.max_restarts),
             restart_window_seconds=_int("ORBIT_RESTART_WINDOW_SECONDS", cls.restart_window_seconds),
             validation_timeout=_float("ORBIT_VALIDATION_TIMEOUT", cls.validation_timeout),
+            validation_stable_seconds=_float(
+                "ORBIT_VALIDATION_STABLE_SECONDS", cls.validation_stable_seconds
+            ),
             heartbeat_timeout=_float("ORBIT_HEARTBEAT_TIMEOUT", cls.heartbeat_timeout),
         )

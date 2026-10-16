@@ -57,6 +57,7 @@ def settings():
         max_restarts=3,
         restart_window_seconds=600,
         validation_timeout=0,
+        validation_stable_seconds=0,
     )
 
 
