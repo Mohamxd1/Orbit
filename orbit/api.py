@@ -74,4 +74,24 @@ def create_app(
     def status():
         return [ContainerOut.model_validate(c, from_attributes=True) for c in store.list_states()]
 
+    @app.get("/metrics")
+    def metrics():
+        states = store.list_states()
+        events = store.list_events(limit=100_000)
+        restarts = [e for e in events if e.action == "restart"]
+        resolved = sum(1 for e in restarts if e.outcome == "resolved")
+        by_health: dict[str, int] = {}
+        for c in states:
+            by_health[c.health] = by_health.get(c.health, 0) + 1
+        return {
+            "orbit_uptime_seconds": round((utcnow() - app.state.started_at).total_seconds()),
+            "tracked_containers": len([c for c in states if c.status != "missing"]),
+            "containers_by_health": by_health,
+            "total_restarts": len(restarts),
+            "successful_recoveries": resolved,
+            "failed_recoveries": len(restarts) - resolved,
+            "recovery_success_rate": round(resolved / len(restarts), 3) if restarts else None,
+            "given_up": [c.name for c in states if c.health == "given_up"],
+        }
+
     return app
