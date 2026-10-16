@@ -5,14 +5,29 @@ from __future__ import annotations
 import logging
 import os
 from contextlib import asynccontextmanager
+from datetime import datetime
+
 from fastapi import FastAPI
 from fastapi.responses import JSONResponse
+from pydantic import BaseModel
 
 from . import __version__
 from .config import Settings
 from .docker_client import DockerBackend
 from .store import Store, utcnow
 from .worker import Monitor
+
+
+class ContainerOut(BaseModel):
+    name: str
+    container_id: str
+    status: str
+    health: str
+    reason: str | None
+    consecutive_failures: int
+    restart_count: int
+    last_restart_at: datetime | None
+    last_checked_at: datetime
 
 
 def create_app(
@@ -54,5 +69,9 @@ def create_app(
         ok = docker_ok and worker_ok
         body = {"status": "ok" if ok else "degraded", "docker": docker_ok, "worker": worker_ok}
         return JSONResponse(body, status_code=200 if ok else 503)
+
+    @app.get("/status", response_model=list[ContainerOut])
+    def status():
+        return [ContainerOut.model_validate(c, from_attributes=True) for c in store.list_states()]
 
     return app
