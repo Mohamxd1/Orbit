@@ -112,3 +112,122 @@ Orbit/
 ├── requirements-dev.txt        # + pytest, httpx, ruff
 └── pyproject.toml              # ruff + pytest config
 ```
+
+## Quick start (deploy in 5 steps)
+
+**Prerequisites:** a Linux host with Docker Engine 24+ and the Docker Compose plugin.
+
+**1. Get the code**
+
+```bash
+git clone https://github.com/mohamxd1/orbit.git
+cd orbit
+```
+
+**2. Configure**
+
+```bash
+cp .env.example .env
+# at minimum, change POSTGRES_PASSWORD
+```
+
+**3. Build and start Orbit and PostgreSQL**
+
+```bash
+docker compose up -d --build
+```
+
+This starts two services:
+- `db`: PostgreSQL 16 with a named volume, so history survives restarts.
+- `orbit`: the API on port 8080, plus the monitor worker. It mounts
+  `/var/run/docker.sock` so it can inspect and restart containers. It also
+  creates the `orbit` Docker network that monitored apps join so heartbeats
+  can reach them.
+
+**4. Check that Orbit is up**
+
+```bash
+curl localhost:8080/health
+# {"status":"ok","docker":true,"worker":true}
+```
+
+**5. (Optional) Watch it heal something**
+
+```bash
+docker compose -f examples/docker-compose.demo.yml up -d
+```
+
+- `web`: nginx with a heartbeat. It stays healthy.
+- `flaky`: exits every 30s. Orbit restarts it and logs a `resolved` event.
+- `broken`: exits immediately. Orbit tries twice, logs `failed`, then
+  `skipped_threshold`, and flags it as `given_up`.
+
+```bash
+watch -n2 'curl -s localhost:8080/status | python3 -m json.tool'
+curl -s localhost:8080/history | python3 -m json.tool
+curl -s localhost:8080/metrics
+```
+
+Clean up the demo with `docker compose -f examples/docker-compose.demo.yml down`.
+
+## Putting your own containers under Orbit
+
+Orbit only touches containers you opt in with labels:
+
+```yaml
+services:
+  api:
+    image: my-api:latest
+    healthcheck:                               # optional, recommended
+      test: ["CMD", "curl", "-f", "http://localhost:8000/healthz"]
+      interval: 10s
+    labels:
+      orbit.enable: "true"                     # required: track this container
+      orbit.heartbeat.url: "http://api:8000/healthz"   # optional HTTP heartbeat
+      orbit.cooldown: "30"                     # optional per-container override (seconds)
+      orbit.max_restarts: "5"                  # optional per-container override
+    networks: [orbit]                          # needed if you use a heartbeat URL
+
+networks:
+  orbit:
+    external: true
+```
+
+The heartbeat URL is called from inside the Orbit container. Use the
+service name on the shared `orbit` network, not `localhost`.
+
+## Configuration
+
+All settings are environment variables. Defaults are shown; see `.env.example`.
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `ORBIT_DATABASE_URL` | `sqlite:///./orbit.db` | SQLAlchemy URL. Compose sets it to PostgreSQL (`postgresql+psycopg://…`) |
+| `ORBIT_LABEL` | `orbit.enable` | Label that marks a container as tracked (value `true`) |
+| `ORBIT_POLL_INTERVAL` | `10` | Seconds between monitor passes |
+| `ORBIT_FAILURE_THRESHOLD` | `2` | Consecutive failed checks before acting |
+| `ORBIT_COOLDOWN_SECONDS` | `60` | Minimum gap between restarts of one container |
+| `ORBIT_MAX_RESTARTS` | `3` | Restarts allowed per container per window |
+| `ORBIT_RESTART_WINDOW_SECONDS` | `600` | Length of that rolling window |
+| `ORBIT_VALIDATION_TIMEOUT` | `60` | Max seconds to wait for a restarted container to be healthy |
+| `ORBIT_VALIDATION_STABLE_SECONDS` | `10` | How long it must stay healthy to count as recovered |
+| `ORBIT_HEARTBEAT_TIMEOUT` | `3` | Timeout per heartbeat request |
+| `ORBIT_HOST` / `ORBIT_PORT` | `0.0.0.0` / `8080` | API bind address |
+| `ORBIT_PUBLISH_PORT` | `8080` | Host port Compose publishes the API on |
+| `ORBIT_LOG_LEVEL` | `INFO` | Log level |
+
+## API reference
+
+Interactive docs are served at `http://localhost:8080/docs` (Swagger UI).
+
+| Endpoint | Description |
+|---|---|
+| `GET /health` | Orbit's own liveness. `200` if Docker is reachable and the worker is running, otherwise `503` |
+| `GET /status` | Every tracked container: status, health, reason, consecutive failures, restart count, last restart |
+| `GET /metrics` | Uptime, tracked count, containers by health, total, successful and failed recoveries, success rate, given-up list |
+| `GET /worker` | Monitor loop: running, poll count, last poll time and duration, last error |
+| `GET /history?container=<name>&limit=100` | Recovery events, newest first, optionally for one container |
+
+Recovery event actions: `restart` (outcome `resolved` or `failed`),
+`skipped_threshold` (restart limit hit), `restart_error` (Docker refused the
+restart).
