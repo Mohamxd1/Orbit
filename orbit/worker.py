@@ -119,6 +119,12 @@ class Monitor:
 
                 s.commit()
 
+            # Containers that were tracked before but no longer exist / lost the label.
+            for state in s.query(ContainerState).filter(ContainerState.name.not_in(seen)):
+                if state.status != "missing":
+                    state.status = "missing"
+                    state.health = "unknown"
+                    state.reason = "container no longer present or no longer labelled"
             s.commit()
 
         with self.status.lock:
